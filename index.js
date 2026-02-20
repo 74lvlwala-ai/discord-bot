@@ -1,6 +1,14 @@
 const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
-const fs = require("fs"); 
-const config = require("./config.json");
+const fs = require("fs");
+
+/* ================= CONFIG (INLINE, NO config.json) ================= */
+const CONFIG = {
+  triggerWords: ["67", "bc", "mc", "tmkc", "bkl", "terimakichut", "randi"],
+  maxWarnings: 3,
+  muteMinutes: 10,
+  channelDeleteMinutes: 5,
+};
+/* =================================================================== */
 
 const client = new Client({
   intents: [
@@ -13,14 +21,12 @@ const client = new Client({
 
 const warnings = {}; // userId -> count
 
-// Auto delete channel after X minutes
+// Auto-delete warning channel
 function scheduleChannelDelete(channel, minutes) {
   setTimeout(async () => {
     try {
-      // Fetch channel from cache safely
-      const fetchedChannel = channel.guild.channels.cache.get(channel.id);
-      if (fetchedChannel && fetchedChannel.deletable) {
-        await fetchedChannel.delete("Auto-deleted warning channel");
+      if (channel && channel.deletable) {
+        await channel.delete("Auto-deleted warning channel");
       }
     } catch (err) {
       console.log("⚠️ Channel delete failed:", err.message);
@@ -28,7 +34,7 @@ function scheduleChannelDelete(channel, minutes) {
   }, minutes * 60 * 1000);
 }
 
-// FIX: Changed "ready" to "clientReady" to remove the terminal warning
+// Ready
 client.once("clientReady", () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
 });
@@ -38,18 +44,14 @@ client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
     if (!message.guild) return;
 
-    // REMOVED: The bot will no longer ignore the server owner!
-    // if (message.author.id === message.guild.ownerId) return;
-
     const content = message.content.toLowerCase();
 
-    // Check prohibited words
-    const hasBadWord = config.triggerWords.some(word =>
+    const hasBadWord = CONFIG.triggerWords.some(word =>
       content.includes(word)
     );
     if (!hasBadWord) return;
 
-    // Try deleting message
+    // Delete message
     try {
       await message.delete();
     } catch {}
@@ -57,15 +59,18 @@ client.on("messageCreate", async (message) => {
     const userId = message.author.id;
     warnings[userId] = (warnings[userId] || 0) + 1;
 
-    // Sanitize username to prevent channel creation crashes
-    const safeUsername = message.author.username.toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Safe channel name
+    const safeUsername = message.author.username
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
     const channelName = `warning-${safeUsername}`;
-    
+
     let warnChannel = message.guild.channels.cache.find(
       c => c.name === channelName
     );
 
-    // Create private channel if not exists
+    // Create private channel
     if (!warnChannel) {
       warnChannel = await message.guild.channels.create({
         name: channelName,
@@ -90,24 +95,26 @@ client.on("messageCreate", async (message) => {
         ],
       });
 
-      scheduleChannelDelete(warnChannel, config.channelDeleteMinutes);
+      scheduleChannelDelete(warnChannel, CONFIG.channelDeleteMinutes);
     }
 
-    // Send warning + audio safely
-    const audioFile = fs.existsSync("./audio.mp3") ? ["./audio.mp3"] : [];
+    // Send warning + audio
+    const audio = fs.existsSync("./audio.mp3") ? ["./audio.mp3"] : [];
     await warnChannel.send({
-      content: `⚠️ **Warning ${warnings[userId]}/${config.maxWarnings}** \nYou used a prohibited word.`,
-      files: audioFile,
+      content: `⚠️ **Warning ${warnings[userId]}/${CONFIG.maxWarnings}**\nYou used a prohibited word.`,
+      files: audio,
     });
 
-    // ---- SAFE MUTE LOGIC ----
-    if (warnings[userId] >= config.maxWarnings) {
+    // Mute logic
+    if (warnings[userId] >= CONFIG.maxWarnings) {
       const member = await message.guild.members.fetch(userId);
       const botMember = message.guild.members.me;
 
-      // Special message just for your testing!
-      if (message.author.id === message.guild.ownerId) {
-        await warnChannel.send("⚠️ **Test Mode Note:** You reached max warnings! Since you are the Server Owner, Discord physically won't let me mute you. I would have muted a normal user though!");
+      // Owner cannot be muted
+      if (member.id === message.guild.ownerId) {
+        await warnChannel.send(
+          "⚠️ You reached max warnings, but server owners cannot be muted by Discord."
+        );
         return;
       }
 
@@ -123,22 +130,19 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
-      try {
-        await member.timeout(
-          config.muteMinutes * 60 * 1000,
-          "Exceeded prohibited word limit"
-        );
+      await member.timeout(
+        CONFIG.muteMinutes * 60 * 1000,
+        "Exceeded prohibited word limit"
+      );
 
-        await warnChannel.send(
-          `🔇 You have been muted for ${config.muteMinutes} minutes.`
-        );
-      } catch (err) {
-        console.log("⚠️ Timeout failed:", err.message);
-      }
+      await warnChannel.send(
+        `🔇 You have been muted for ${CONFIG.muteMinutes} minutes.`
+      );
     }
   } catch (err) {
-    console.log("⚠️ General error:", err.message);
+    console.log("⚠️ Error:", err.message);
   }
 });
 
-client.login(config.token);
+/* ================= LOGIN (Railway ENV TOKEN) ================= */
+client.login(process.env.TOKEN);
